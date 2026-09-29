@@ -89,3 +89,14 @@ py -m bandit -r app -lll -q
 ```
 
 Автоматические проверки также настроены в GitHub Actions. Для настоящей доставки событий нужен постоянно доступный HTTPS webhook; его URL передаётся в `WEBHOOK_PUBLIC_URL`, после чего вызывается `POST /max/subscribe` с ключом `X-API-Key` в production. Локальный Long Polling пригоден для отладки, но не для публичной демонстрации с выключенным компьютером.
+
+## GitHub auto-deploy
+
+After the CI checks pass, pushes to `main` deploy through a restricted SSH account. The account accepts only a source archive and runs the deployment script. The server `.env` and PostgreSQL volume remain outside the uploaded archive.
+
+In repository **Settings > Secrets and variables > Actions**, add these secrets:
+
+- `DEPLOY_HOST` - the server IP or hostname.
+- `DEPLOY_SSH_PRIVATE_KEY` - the private key at `%USERPROFILE%\.ssh\uniroute_github_deploy`.
+
+Set the repository variable `DEPLOY_ENABLED` to `true` only after both secrets are saved. The server public host key is pinned in `.github/deploy_known_hosts`. To copy the private key for the GitHub secret field, run `Get-Content "$env:USERPROFILE\.ssh\uniroute_github_deploy" -Raw | Set-Clipboard` in PowerShell. Never commit the private key. Run **Actions > Tests and security > Run workflow** on `main` to deploy immediately, or push a commit to `main`.
