@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import json
 import math
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -31,10 +32,13 @@ async def lifespan(_: FastAPI):
     if settings.app_env == "production":
         if not settings.api_key or len(settings.api_key) < 32 or not settings.max_webhook_secret or len(settings.max_webhook_secret) < 32 or not settings.max_bot_token:
             raise RuntimeError("Production requires API_KEY and MAX_WEBHOOK_SECRET of at least 32 characters, and MAX_BOT_TOKEN")
+        if hmac.compare_digest(settings.api_key, settings.max_webhook_secret):
+            raise RuntimeError("Production API_KEY and MAX_WEBHOOK_SECRET must be different")
         if not settings.database_url.startswith("postgresql") or any(placeholder in settings.database_url for placeholder in ("local-dev-only-change-me", "change-this-local-password")):
             raise RuntimeError("Production requires PostgreSQL with a non-default password")
-        if not settings.webhook_public_url or not settings.webhook_public_url.startswith("https://"):
-            raise RuntimeError("Production requires an HTTPS WEBHOOK_PUBLIC_URL")
+        webhook = urlparse(settings.webhook_public_url or "")
+        if webhook.scheme != "https" or not webhook.hostname or webhook.path != "/webhook/max" or webhook.username or webhook.password:
+            raise RuntimeError("Production requires an HTTPS WEBHOOK_PUBLIC_URL ending in /webhook/max")
     Base.metadata.create_all(bind=engine)
     migrate_schema()
     with next(get_db()) as db:
@@ -76,7 +80,7 @@ def _onboarding_prompt(locale: str, state: str) -> str:
     return ONBOARDING_PROMPTS.get(state, ONBOARDING_PROMPTS["ask_country"]).get(locale, ONBOARDING_PROMPTS.get(state, ONBOARDING_PROMPTS["ask_country"])["en"])
 
 
-def _onboarding_buttons(locale: str, state: str) -> list[list[dict]]:
+def _onboarding_buttons(locale: str, state: str, button_type: str = "message") -> list[list[dict]]:
     options = {
         "ask_education": [("secondary", {"en": "Secondary school", "ru": "Среднее образование", "fr": "Études secondaires", "es": "Educación secundaria"}), ("undergraduate", {"en": "Some university", "ru": "Неоконченное высшее", "fr": "Études universitaires en cours", "es": "Estudios universitarios"})],
         "ask_degree": [("bachelor", {"en": "Bachelor", "ru": "Бакалавриат", "fr": "Licence", "es": "Grado"}), ("master", {"en": "Master", "ru": "Магистратура", "fr": "Master", "es": "Máster"})],
@@ -89,9 +93,13 @@ def _onboarding_buttons(locale: str, state: str) -> list[list[dict]]:
     }
     if state not in options:
         return []
-    buttons = [_button(labels.get(locale, labels["en"]), f"onboard:{state}:{value}") for value, labels in options[state]]
+    buttons = []
+    for value, labels in options[state]:
+        label = labels.get(locale, labels["en"])
+        buttons.append(_button(label, f"onboard:{state}:{value}") if button_type == "callback" else _message_button(label))
     if state == "ask_field":
-        return [buttons[index:index + 3] for index in range(0, len(buttons), 3)]
+        # One full-width row per field keeps complete names visible in MAX.
+        return [[button] for button in buttons]
     return [buttons]
 
 
@@ -100,8 +108,19 @@ async def protect_api(request: Request, call_next):
     if settings.app_env == "production" and request.url.path not in ("/health", "/webhook/max"):
         supplied_key = request.headers.get("x-api-key", "")
         if not settings.api_key or not hmac.compare_digest(supplied_key, settings.api_key):
-            return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
-    return await call_next(request)
+            response = JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+        else:
+            response = await call_next(request)
+    else:
+        response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cache-Control", "no-store")
+    if settings.app_env == "production":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return response
 
 
 @app.get("/health")
@@ -342,6 +361,40 @@ def _button(text: str, payload: str) -> dict:
     return {"type": "callback", "text": text, "payload": payload}
 
 
+def _message_button(text: str) -> dict:
+    # MAX's message buttons post their visible label as a message from the
+    # user, so answers remain visible in the chat history.
+    return {"type": "message", "text": text}
+
+
+def _country_buttons(locale: str) -> list[list[dict]]:
+    return [[_message_button(label) for label in COUNTRY_LABELS[locale]]]
+
+
+def _interface_language_buttons() -> list[list[dict]]:
+    return [[_message_button(name) for name in LANGUAGES.values()]]
+
+
+def _country_choice(locale: str, text: str) -> str | None:
+    normalized = text.strip().casefold()
+    labels = COUNTRY_LABELS[locale]
+    if normalized == labels[0].strip().casefold():
+        return "Nigeria"
+    if normalized == labels[1].strip().casefold():
+        return "other"
+    return None
+
+
+def _onboarding_choice(locale: str, state: str, text: str) -> str | None:
+    # Resolve the text emitted by a MAX message button to the stable internal
+    # value used by the existing profile flow.
+    for row in _onboarding_buttons(locale, state, button_type="callback"):
+        for button in row:
+            if button["text"].strip().casefold() == text.strip().casefold():
+                return button["payload"].split(":", 2)[2]
+    return None
+
+
 async def _handle_max_update(update: dict, db: Session) -> None:
     update_type = update.get("update_type")
     user_id, text, payload = _user_from_update(update)
@@ -363,10 +416,14 @@ async def _handle_max_update(update: dict, db: Session) -> None:
     if update_type == "bot_started" or (text and text.strip().lower() in ("/start", "start")):
         user.state = "choose_ui_language"
         db.commit()
-        await max_client.send_message(send_id, tr(user.ui_language, "choose_language"), [[_button(name, f"ui_lang:{code}") for code, name in LANGUAGES.items()]])
+        await max_client.send_message(send_id, tr(user.ui_language, "choose_language"), _interface_language_buttons())
         return
 
     action = payload or text or ""
+    if user.state == "choose_ui_language" and not payload and text:
+        chosen_language = next((code for code, name in LANGUAGES.items() if name.strip().casefold() == text.strip().casefold()), None)
+        if chosen_language:
+            action = f"ui_lang:{chosen_language}"
     normalized_action = action.strip().lower()
     locale = user.ui_language if user.ui_language in LANGUAGES else "en"
     if action == "menu":
@@ -380,7 +437,7 @@ async def _handle_max_update(update: dict, db: Session) -> None:
     elif action.startswith("nav:"):
         normalized_action = "/" + action.split(":", 1)[1]
         if normalized_action == "/language":
-            await max_client.send_message(send_id, tr(locale, "choose_language"), [[_button(name, f"ui_lang:{code}") for code, name in LANGUAGES.items()]])
+            await max_client.send_message(send_id, tr(locale, "choose_language"), _interface_language_buttons())
         elif normalized_action == "/help":
             await max_client.send_message(send_id, tr(locale, "help"))
         elif normalized_action == "/search":
@@ -393,8 +450,7 @@ async def _handle_max_update(update: dict, db: Session) -> None:
             else:
                 user.state = "ask_country"
                 db.commit()
-                country_labels = COUNTRY_LABELS[locale]
-                await max_client.send_message(send_id, _onboarding_prompt(locale, "ask_country"), [[_button(country_labels[0], "country:Nigeria"), _button(country_labels[1], "country:other")]])
+                await max_client.send_message(send_id, _onboarding_prompt(locale, "ask_country"), _country_buttons(locale))
         elif normalized_action == "/applications":
             applications = db.scalars(select(Application).where(Application.user_id == user.id).options(selectinload(Application.steps), joinedload(Application.program).joinedload(Program.university))).all()
             if not applications:
@@ -407,7 +463,7 @@ async def _handle_max_update(update: dict, db: Session) -> None:
             db.commit()
             await max_client.send_message(send_id, "Tell me the field you want to study.")
     elif normalized_action == "/language":
-        await max_client.send_message(send_id, tr(locale, "choose_language"), [[_button(name, f"ui_lang:{code}") for code, name in LANGUAGES.items()]])
+        await max_client.send_message(send_id, tr(locale, "choose_language"), _interface_language_buttons())
     elif normalized_action == "/search":
         user.state = "ask_search"
         db.commit()
@@ -423,8 +479,7 @@ async def _handle_max_update(update: dict, db: Session) -> None:
         db.commit()
         if is_startup_choice:
             country_question = tr(choice, "ask_country")
-            country_labels = COUNTRY_LABELS[choice]
-            await max_client.send_message(send_id, f"{tr(choice, 'welcome', bot=settings.bot_name)}\n\n{country_question}", [[_button(country_labels[0], "country:Nigeria"), _button(country_labels[1], "country:other")]])
+            await max_client.send_message(send_id, f"{tr(choice, 'welcome', bot=settings.bot_name)}\n\n{country_question}", _country_buttons(choice))
         else:
             await max_client.send_message(send_id, tr(choice, "language_changed"))
     elif normalized_action == "/help":
@@ -439,16 +494,14 @@ async def _handle_max_update(update: dict, db: Session) -> None:
         user.admission_year = None
         user.state = "ask_country"
         db.commit()
-        country_labels = COUNTRY_LABELS[locale]
-        await max_client.send_message(send_id, tr(locale, "reset", country=tr(locale, "ask_country")), [[_button(country_labels[0], "country:Nigeria"), _button(country_labels[1], "country:other")]])
+        await max_client.send_message(send_id, tr(locale, "reset", country=tr(locale, "ask_country")), _country_buttons(locale))
     elif normalized_action == "/programs":
         if user.state == "profile_complete":
             await show_recommendations(user, db, send_id)
         else:
             user.state = "ask_country"
             db.commit()
-            country_labels = COUNTRY_LABELS[locale]
-            await max_client.send_message(send_id, tr(locale, "profile_first", country=tr(locale, "ask_country")), [[_button(country_labels[0], "country:Nigeria"), _button(country_labels[1], "country:other")]])
+            await max_client.send_message(send_id, tr(locale, "profile_first", country=tr(locale, "ask_country")), _country_buttons(locale))
     elif normalized_action == "/applications":
         applications = db.scalars(select(Application).where(Application.user_id == user.id).options(selectinload(Application.steps), joinedload(Application.program).joinedload(Program.university))).all()
         if not applications:
@@ -465,12 +518,13 @@ async def _handle_max_update(update: dict, db: Session) -> None:
         db.commit()
         await show_recommendations(user, db, send_id)
     elif action.startswith("country:") or user.state == "ask_country":
-        if action.startswith("country:") and action.endswith(":other"):
+        selected_country = _country_choice(locale, action) if user.state == "ask_country" and not action.startswith("country:") else None
+        if (action.startswith("country:") and action.endswith(":other")) or selected_country == "other":
             user.state = "ask_country"
             db.commit()
             await max_client.send_message(send_id, _onboarding_prompt(locale, "ask_country"))
             return
-        user.country = action.split(":", 1)[1].strip()[:80] if action.startswith("country:") else action.strip()[:80]
+        user.country = action.split(":", 1)[1].strip()[:80] if action.startswith("country:") else (selected_country or action.strip()[:80])
         if not user.country or user.country.lower() == "other":
             await max_client.send_message(send_id, _onboarding_prompt(locale, "ask_country"))
             return
@@ -486,7 +540,7 @@ async def _handle_max_update(update: dict, db: Session) -> None:
                 await max_client.send_message(send_id, _onboarding_prompt(locale, current_state), _onboarding_buttons(locale, current_state))
                 return
         else:
-            value = action
+            value = _onboarding_choice(locale, current_state, action) or action
             for prefix in ("degree:", "field:", "language:", "dorm:"):
                 if action.startswith(prefix):
                     value = action[len(prefix):]

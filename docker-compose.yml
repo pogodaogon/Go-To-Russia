@@ -2,6 +2,9 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 1.0
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-admission}
       POSTGRES_USER: ${POSTGRES_USER:-admission}
@@ -19,6 +22,19 @@ services:
   app:
     build: .
     restart: unless-stopped
+    init: true
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.0
+    stop_grace_period: 30s
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
     env_file:
       - path: .env
         required: false

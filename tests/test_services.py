@@ -9,6 +9,8 @@ from app.main import _user_from_update
 from app import main as main_module
 import asyncio
 from app.main import _onboarding_prompt
+from app.main import _onboarding_buttons
+from app.main import _country_buttons, _country_choice, _interface_language_buttons
 from app.seed import seed_database
 
 
@@ -90,7 +92,8 @@ def test_max_callback_runs_profile_transition_and_answers_pressed_message(monkey
         user_id, _, buttons, callback_id = sent[0]
         assert user_id == 54321
         assert callback_id == "callback-test-123"
-        assert any(button["payload"].startswith("onboard:ask_field:") for row in buttons for button in row)
+        assert buttons
+        assert all(button["type"] == "message" for row in buttons for button in row)
         assert sent[0][1] == _onboarding_prompt("en", "ask_field")
 
 
@@ -104,6 +107,48 @@ def test_field_question_is_defined_for_every_supported_ui_language():
     assert ord(prompts["ru"][0]) == 0x041A
     assert chr(0x00E9) in prompts["fr"]
     assert ord(prompts["es"][0]) == 0x00BF
+
+
+def test_answer_buttons_post_visible_choice_and_field_names_get_full_width():
+    field_buttons = _onboarding_buttons("en", "ask_field")
+    assert len(field_buttons) >= 8
+    assert all(len(row) == 1 for row in field_buttons)
+    assert all(button["type"] == "message" and "payload" not in button for row in field_buttons for button in row)
+    labels = [button["text"] for row in field_buttons for button in row]
+    assert "Information Security" in labels
+    assert all(button["type"] == "message" for row in _interface_language_buttons() for button in row)
+    assert all(button["type"] == "message" for row in _country_buttons("en") for button in row)
+    assert _country_choice("en", "Nigeria") == "Nigeria"
+    assert _country_choice("en", "Other country") == "other"
+
+
+def test_message_button_answer_is_parsed_as_the_selected_profile_value(monkeypatch):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    sent = []
+
+    class FakeMaxClient:
+        async def send_message(self, user_id, text, buttons=None):
+            sent.append((user_id, text, buttons))
+
+    monkeypatch.setattr(main_module, "max_client", FakeMaxClient())
+    update = {
+        "update_type": "message_created",
+        "message": {
+            "sender": {"user_id": 54321},
+            "body": {"text": "Information Security"},
+        },
+    }
+    with Session(engine) as db:
+        user = User(max_user_id=54321, state="ask_field", ui_language="en")
+        db.add(user)
+        db.commit()
+        asyncio.run(main_module.handle_max_update(update, db))
+        db.refresh(user)
+        assert user.field == "information_security"
+        assert user.state == "ask_language"
+        assert sent[0][1] == _onboarding_prompt("en", "ask_language")
+        assert all(button["type"] == "message" for row in sent[0][2] for button in row)
 
 
 def test_ai_matches_whole_term_not_aircraft_substring():

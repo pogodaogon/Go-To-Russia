@@ -7,8 +7,14 @@ def test_production_api_requires_key(monkeypatch):
     monkeypatch.setattr(main.settings, "app_env", "production")
     monkeypatch.setattr(main.settings, "api_key", "test-admin-key")
     client = TestClient(main.app, raise_server_exceptions=False)
-    assert client.get("/health").status_code == 200
-    assert client.get("/openapi.json").status_code == 401
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.headers["strict-transport-security"] == "max-age=31536000"
+    assert health.headers["x-content-type-options"] == "nosniff"
+    assert health.headers["cache-control"] == "no-store"
+    denied = client.get("/openapi.json")
+    assert denied.status_code == 401
+    assert denied.headers["x-frame-options"] == "DENY"
     assert client.get("/openapi.json", headers={"X-API-Key": "test-admin-key"}).status_code == 200
 
 

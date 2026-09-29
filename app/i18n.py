@@ -1,7 +1,7 @@
 """Small, explicit UI catalog. Add a locale only when the full flow is translated."""
 
 LANGUAGES = {"ru": "Русский", "en": "English", "fr": "Français", "es": "Español"}
-COUNTRY_LABELS = {"ru": ("Нигерия", "Другая страна"), "en": ("Nigeria", "Other country"), "fr": ("Nigeria", "Autre pays"), "es": ("Nigeria", "Otro país")}
+COUNTRY_LABELS = {"ru": ["Нигерия", "Другая страна"], "en": ["Nigeria", "Other country"], "fr": ["Nigeria", "Autre pays"], "es": ["Nigeria", "Otro país"]}
 
 TEXT = {
     "ru": {
