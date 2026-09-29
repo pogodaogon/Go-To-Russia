@@ -1,8 +1,12 @@
 from datetime import date
 
-from app.models import Program, User
-from app.services import field_matches, score_program
+from app.models import Program, University, User
+from app.services import field_matches, recommendations, score_program
+from app.db import Base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 from app.main import _user_from_update
+from app.seed import seed_database
 
 
 def test_score_program_matches_daniel_profile():
@@ -30,3 +34,42 @@ def test_ai_matches_whole_term_not_aircraft_substring():
     assert field_matches("computer_science", aircraft) is False
     assert field_matches("I want AI", aircraft) is False
     assert field_matches("I want AI", computer_science) is True
+
+
+def test_information_security_aliases_match_curated_program():
+    program = Program(name="Information Security — Computer Systems Security", degree="bachelor", field="information_security", categories="information_security, cybersecurity", language="russian", source_url="https://example.com")
+    assert field_matches("Информационная безопасность", program) is True
+    assert field_matches("cybersecurity", program) is True
+
+
+def test_recommendations_can_find_other_language_for_opt_in_fallback():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        university = University(name="MEPhI", short_name="MEPhI", website="https://example.com")
+        db.add(university)
+        db.flush()
+        db.add(Program(university_id=university.id, name="Computer Science", degree="bachelor", field="computer_science", language="english", source_url="https://example.com", admission_cycle=2027))
+        user = User(max_user_id=1, degree="bachelor", field="computer_science", language="russian", admission_year=2027)
+        db.add(user)
+        db.commit()
+        assert recommendations(db, user) == []
+        alternatives = recommendations(db, user, ignore_language=True)
+        assert len(alternatives) == 1
+        assert alternatives[0][0].language == "english"
+        assert "language_match" in alternatives[0][2]
+
+
+def test_seeded_information_security_program_is_recommended_for_russian_profile():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        seed_database(db)
+        user = User(max_user_id=2, degree="bachelor", field="information_security", language="russian", admission_year=2027)
+        db.add(user)
+        db.commit()
+        results = recommendations(db, user)
+        assert results
+        assert results[0][0].name == "Information Security — Computer Systems Security"
+        assert results[0][0].tuition is None
+        assert results[0][0].source_url.startswith("https://eng.mephi.ru/")

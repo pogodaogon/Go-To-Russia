@@ -78,14 +78,19 @@ def _onboarding_buttons(locale: str, state: str) -> list[list[dict]]:
     options = {
         "ask_education": [("secondary", {"en": "Secondary school", "ru": "Среднее образование", "fr": "Études secondaires", "es": "Educación secundaria"}), ("undergraduate", {"en": "Some university", "ru": "Неоконченное высшее", "fr": "Études universitaires en cours", "es": "Estudios universitarios"})],
         "ask_degree": [("bachelor", {"en": "Bachelor", "ru": "Бакалавриат", "fr": "Licence", "es": "Grado"}), ("master", {"en": "Master", "ru": "Магистратура", "fr": "Master", "es": "Máster"})],
-        "ask_field": [("computer_science", {"en": "Computer Science", "ru": "Информатика", "fr": "Informatique", "es": "Informática"}), ("data_science", {"en": "Data Science", "ru": "Наука о данных", "fr": "Science des données", "es": "Ciencia de datos"}), ("engineering", {"en": "Engineering", "ru": "Инженерия", "fr": "Ingénierie", "es": "Ingeniería"}), ("economics", {"en": "Economics", "ru": "Экономика", "fr": "Économie", "es": "Economía"})],
+        "ask_field": [("computer_science", {"en": "Computer Science", "ru": "Информатика", "fr": "Informatique", "es": "Informática"}), ("information_security", {"en": "Information Security", "ru": "Информационная безопасность", "fr": "Cybersécurité", "es": "Ciberseguridad"}), ("data_science", {"en": "Data Science", "ru": "Наука о данных", "fr": "Science des données", "es": "Ciencia de datos"}), ("engineering", {"en": "Engineering", "ru": "Инженерия", "fr": "Ingénierie", "es": "Ingeniería"}), ("economics", {"en": "Economics", "ru": "Экономика", "fr": "Économie", "es": "Economía"})],
         "ask_language": [("english", {"en": "English", "ru": "Английский", "fr": "Anglais", "es": "Inglés"}), ("russian", {"en": "Russian", "ru": "Русский", "fr": "Russe", "es": "Ruso"})],
         "ask_russian_level": [("none", {"en": "None", "ru": "Не знаю", "fr": "Aucun", "es": "Ninguno"}), ("basic", {"en": "Basic", "ru": "Начальный", "fr": "Débutant", "es": "Básico"}), ("intermediate", {"en": "Intermediate", "ru": "Средний", "fr": "Intermédiaire", "es": "Intermedio"}), ("advanced", {"en": "Advanced", "ru": "Продвинутый", "fr": "Avancé", "es": "Avanzado"})],
         "ask_quota": [("yes", {"en": "Yes", "ru": "Да", "fr": "Oui", "es": "Sí"}), ("no", {"en": "No", "ru": "Нет", "fr": "Non", "es": "No"})],
         "ask_budget_currency": [("RUB", {"en": "RUB", "ru": "RUB", "fr": "RUB", "es": "RUB"}), ("USD", {"en": "USD", "ru": "USD", "fr": "USD", "es": "USD"})],
         "ask_dormitory": [("yes", {"en": "Yes", "ru": "Да", "fr": "Oui", "es": "Sí"}), ("no", {"en": "Not necessary", "ru": "Не обязательно", "fr": "Pas nécessaire", "es": "No es necesario"})],
     }
-    return [[_button(labels.get(locale, labels["en"]), f"onboard:{state}:{value}") for value, labels in options[state]]] if state in options else []
+    if state not in options:
+        return []
+    buttons = [_button(labels.get(locale, labels["en"]), f"onboard:{state}:{value}") for value, labels in options[state]]
+    if state == "ask_field":
+        return [buttons[index:index + 3] for index in range(0, len(buttons), 3)]
+    return [buttons]
 
 
 @app.middleware("http")
@@ -542,6 +547,13 @@ async def _handle_max_update(update: dict, db: Session) -> None:
             await show_recommendations(user, db, send_id)
     elif action == "recommendations":
         await show_recommendations(user, db, send_id)
+    elif action.startswith("recommendations:language:"):
+        language = action.rsplit(":", 1)[1]
+        if language not in {"english", "russian"}:
+            return
+        user.language = language
+        db.commit()
+        await show_recommendations(user, db, send_id)
     elif action.startswith("program:"):
         try:
             program_id = int(action.split(":", 1)[1])
@@ -702,7 +714,13 @@ async def show_recommendations(user: User, db: Session, send_id: int | None = No
     locale = user.ui_language if user.ui_language in LANGUAGES else "en"
     results = recommendations(db, user)[:6]
     if not results:
-        await max_client.send_message(send_id or user.max_user_id, tr(locale, "no_results"))
+        alternatives = recommendations(db, user, ignore_language=True)
+        available_languages = sorted({program.language for program, _, _ in alternatives})
+        if alternatives and user.language not in available_languages:
+            buttons = [[_button(tr(locale, f"show_{language}_programs"), f"recommendations:language:{language}")] for language in available_languages]
+            await max_client.send_message(send_id or user.max_user_id, tr(locale, "no_language_results", requested_language=tr(locale, user.language or "unknown")), buttons)
+        else:
+            await max_client.send_message(send_id or user.max_user_id, tr(locale, "no_results"))
         return
     text_lines = [tr(locale, "recommendations")]
     buttons = []

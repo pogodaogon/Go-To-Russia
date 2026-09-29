@@ -127,6 +127,18 @@ CATALOG = [
         "requirements": [("documents", "The faculty lists translated education documents and transcript among its application documents."), ("admission", "Confirm the next cycle's entrance exams, application route and deadlines with the faculty.")],
         "documents": [("Passport", "See the faculty's English-language admission checklist.", "https://fgp.msu.ru/admission/eng"), ("Education certificate and transcript", "The faculty specifies notarized Russian translations of education documents and transcript.", "https://fgp.msu.ru/admission/eng")],
     },
+    {
+        "short_name": "MEPhI", "university": "National Research Nuclear University MEPhI", "website": "https://eng.mephi.ru/",
+        "admissions_url": "https://eng.mephi.ru/academics/admissions", "fields": "information security, cybersecurity, computer science",
+        "name": "Information Security — Computer Systems Security", "degree": "bachelor", "field": "information_security",
+        "categories": "information_security, cybersecurity, computer_security, computer_science",
+        "language": "russian", "duration": 4, "source": "https://eng.mephi.ru/academics/degrees-and-programs/ba",
+        "description": "MEPhI's official bachelor's catalogue lists Information Security (10.03.01), Computer Systems Security, taught in Russian. The 2027/28 international intake, tuition, deadlines and available places are not confirmed yet.",
+        "facts": [],
+        "requirements": [("language", "The official programme list identifies Russian as the language of study; confirm any Russian-language proficiency evidence required for the selected admission route."), ("admission", "MEPhI publishes admission information for international applicants. Confirm the 2027/28 programme availability, entrance exams, tuition and deadlines directly with the university.")],
+        "documents": [("Passport", "Use MEPhI's current international applicant instructions; document translation and legalization requirements depend on the issuing country.", "https://eng.mephi.ru/academics/admissions"), ("Education certificate and transcript", "Confirm credential recognition, translation and legalization requirements with MEPhI for the 2027/28 cycle.", "https://eng.mephi.ru/academics/admissions")],
+        "verified_at": date(2026, 9, 29),
+    },
 ]
 
 
@@ -197,7 +209,7 @@ def seed_database(db: Session) -> int:
         program.dormitory_confirmed = False
         program.admission_routes = "For the 2027 cycle, contract and government quota availability must be confirmed with the university."
         program.listed = True
-        program.verified_at = VERIFIED_AT
+        program.verified_at = item.get("verified_at", VERIFIED_AT)
         db.flush()
 
         for kind, value in item["requirements"]:

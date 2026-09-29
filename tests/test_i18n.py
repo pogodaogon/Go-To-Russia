@@ -43,3 +43,9 @@ def test_program_details_are_translated_for_all_supported_locales():
         assert len(requirements) == 4
         assert len(documents) == 4
         assert tr(locale, "choose_language")
+from app.i18n import tr
+
+
+def test_language_no_results_message_formats_selected_language():
+    message = tr("ru", "no_language_results", requested_language=tr("ru", "russian"))
+    assert "русский" in message

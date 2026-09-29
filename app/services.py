@@ -15,6 +15,7 @@ FIELD_ALIASES = {
     "data_science": ("data science", "machine learning", "artificial intelligence", "ai", "computer science", "analytics"),
     "engineering": ("engineering", "computer science", "applied mathematics", "informatics"),
     "economics": ("economics", "business analytics", "finance", "management"),
+    "information_security": ("information security", "cybersecurity", "cyber security", "computer security", "network security", "security of information technologies", "information security"),
 }
 
 
@@ -28,6 +29,8 @@ def field_matches(user_field: str | None, program: Program) -> bool | None:
     requested_text = user_field.strip().lower().replace("_", " ")
     requested = requested_text.replace(" ", "_")
     terms = FIELD_ALIASES.get(requested)
+    if terms is None and any(_contains_phrase(requested_text, term) for term in ("\u0438\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c", "\u043a\u0438\u0431\u0435\u0440\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c", "\u043a\u0438\u0431\u0435\u0440 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c", "\u0437\u0430\u0449\u0438\u0442\u0430 \u0438\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u0438")):
+        terms = FIELD_ALIASES["information_security"]
     if terms is None and any(_contains_phrase(requested_text, term) for term in ("ai", "artificial intelligence", "machine learning")):
         terms = FIELD_ALIASES["artificial_intelligence"]
     if terms is None:
@@ -54,14 +57,14 @@ def score_program(user: User, program: Program) -> tuple[list[str], list[str]]:
     return matched, not_matched
 
 
-def recommendations(db: Session, user: User) -> list[tuple[Program, list[str], list[str]]]:
+def recommendations(db: Session, user: User, *, ignore_language: bool = False) -> list[tuple[Program, list[str], list[str]]]:
     statement = select(Program).options(joinedload(Program.university)).where(Program.listed.is_(True), Program.admission_cycle == (user.admission_year or 2027))
     if user.degree:
         if user.degree == "bachelor":
             statement = statement.where(Program.degree.in_(("bachelor", "specialist")))
         else:
             statement = statement.where(Program.degree == user.degree)
-    if user.language:
+    if user.language and not ignore_language:
         statement = statement.where(Program.language == user.language)
     programs = db.scalars(statement).all()
     scored = [(program, *score_program(user, program)) for program in programs]
