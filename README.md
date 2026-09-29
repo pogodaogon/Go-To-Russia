@@ -99,4 +99,4 @@ In repository **Settings > Secrets and variables > Actions**, add these secrets:
 - `DEPLOY_HOST` - the server IP or hostname.
 - `DEPLOY_SSH_PRIVATE_KEY` - the private key at `%USERPROFILE%\.ssh\uniroute_github_deploy`.
 
-Set the repository variable `DEPLOY_ENABLED` to `true` only after both secrets are saved. The server public host key is pinned in `.github/deploy_known_hosts`. To copy the private key for the GitHub secret field, run `Get-Content "$env:USERPROFILE\.ssh\uniroute_github_deploy" -Raw | Set-Clipboard` in PowerShell. Never commit the private key. Run **Actions > Tests and security > Run workflow** on `main` to deploy immediately, or push a commit to `main`.
+The server public host key is pinned in `.github/deploy_known_hosts`. To copy the private key for the GitHub secret field, run `Get-Content "$env:USERPROFILE\.ssh\uniroute_github_deploy" -Raw | Set-Clipboard` in PowerShell. Never commit the private key. Run **Actions > Tests and security > Run workflow** on `main` to deploy immediately, or push a commit to `main`.
