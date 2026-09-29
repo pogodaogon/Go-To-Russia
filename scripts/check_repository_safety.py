@@ -12,7 +12,7 @@ SECRET_PATTERNS = {
     "private key": re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     "GitHub token": re.compile(rb"(?:ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})"),
     "API token": re.compile(rb"(?:sk-[A-Za-z0-9_-]{30,}|xox[baprs]-[A-Za-z0-9-]{20,})"),
-    "configured secret": re.compile(rb"(?m)^\s*(?:MAX_BOT_TOKEN|MAX_WEBHOOK_SECRET|API_KEY|LLM_API_KEY)\s*=\s*[^\s#]+"),
+    "configured secret": re.compile(rb"(?m)^[ \t]*(?:MAX_BOT_TOKEN|MAX_WEBHOOK_SECRET|API_KEY|LLM_API_KEY)[ \t]*=[ \t]*[^\s#]+"),
 }
 
 
@@ -25,7 +25,7 @@ def main() -> int:
     findings = []
     for path in tracked:
         name = path.name.lower()
-        if name in FORBIDDEN_NAMES or name.startswith(".env.") or path.suffix.lower() in FORBIDDEN_SUFFIXES:
+        if name in FORBIDDEN_NAMES or (name.startswith(".env.") and name != ".env.example") or path.suffix.lower() in FORBIDDEN_SUFFIXES:
             findings.append(f"{path}: forbidden runtime or secret file")
             continue
         if not path.is_file() or path.stat().st_size > 2_000_000:

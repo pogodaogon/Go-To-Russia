@@ -8,7 +8,7 @@
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-if (-not (Test-Path .env)) { New-Item -ItemType File .env | Out-Null }
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 uvicorn app.main:app --reload
 ```
 
@@ -39,7 +39,7 @@ Swagger доступен по адресу <http://localhost:8000/docs>. Для 
 
 ## Настройки
 
-Создайте локальный `.env` и задайте в нём нужные параметры. Основные параметры:
+Скопируйте `.env.example` в локальный `.env` и задайте в нём нужные параметры. Шаблон не содержит действующих секретов. Основные параметры:
 
 - `DATABASE_URL` — PostgreSQL для развёртывания или SQLite для локальной разработки.
 - `MAX_BOT_TOKEN`, `MAX_WEBHOOK_SECRET`, `WEBHOOK_PUBLIC_URL` — интеграция с MAX.
