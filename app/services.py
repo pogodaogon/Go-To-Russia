@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -16,20 +18,24 @@ FIELD_ALIASES = {
 }
 
 
+def _contains_phrase(text: str, phrase: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", text) is not None
+
+
 def field_matches(user_field: str | None, program: Program) -> bool | None:
     if not user_field:
         return None
     requested_text = user_field.strip().lower().replace("_", " ")
     requested = requested_text.replace(" ", "_")
     terms = FIELD_ALIASES.get(requested)
-    if terms is None and requested_text in {"ai", "artificial intelligence", "machine learning"}:
+    if terms is None and any(_contains_phrase(requested_text, term) for term in ("ai", "artificial intelligence", "machine learning")):
         terms = FIELD_ALIASES["artificial_intelligence"]
     if terms is None:
-        terms = tuple(term for aliases in FIELD_ALIASES.values() for term in aliases if term in requested_text)
+        terms = tuple(term for aliases in FIELD_ALIASES.values() for term in aliases if _contains_phrase(requested_text, term))
     if not terms:
         terms = (requested_text,)
     haystack = f"{program.field} {program.categories} {program.name}".lower().replace("_", " ")
-    return any(term in haystack for term in terms)
+    return any(_contains_phrase(haystack, term) for term in terms)
 
 
 def score_program(user: User, program: Program) -> tuple[list[str], list[str]]:

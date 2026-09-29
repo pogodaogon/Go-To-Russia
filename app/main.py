@@ -19,7 +19,7 @@ from .i18n import COUNTRY_LABELS, LANGUAGES, programme_content, route_step_text,
 from .models import Application, ApplicationDocument, ApplicationStep, ProcessedUpdate, Program, ProgramFact, University, User
 from .schemas import ApplicationCreate, ApplicationDocumentResponse, ApplicationDocumentUpdate, ApplicationResponse, ProfileResponse, ProfileUpdate, ProgramResponse, QuestionRequest, RecommendationRequest, UniversityResponse
 from .seed import seed_database
-from .services import create_application, recommendations
+from .services import CRITERIA, create_application, recommendations
 from .qa import answer_question
 from .reminders import reminder_loop
 
@@ -201,6 +201,7 @@ def get_recommendations(payload: RecommendationRequest, db: Session = Depends(ge
             "dormitory": program.dormitory if program.dormitory_confirmed else None,
             "match_count": len(matched),
             "criteria_count": len(matched) + len(not_matched),
+            "unknown_count": len(CRITERIA) - len(matched) - len(not_matched),
             "matched": matched,
             "not_matched": not_matched,
             "source_url": program.source_url,
@@ -709,7 +710,11 @@ async def show_recommendations(user: User, db: Session, send_id: int | None = No
         tuition = f"{program.tuition:,.0f} {program.currency}" if program.tuition is not None else tr(locale, "price_unknown")
         housing = tr(locale, "housing_yes" if program.dormitory else "housing_no") if program.dormitory_confirmed else tr(locale, "not_confirmed")
         criterion_count = len(matched) + len(_)
-        text_lines.append(f"\n{program.university.short_name} — {program.name}\n{tr(locale, 'match', matched=len(matched), total=criterion_count)} | {tuition} | {tr(locale, 'housing_label')}: {housing}")
+        unknown_count = len(CRITERIA) - criterion_count
+        match_text = tr(locale, 'match', matched=len(matched), total=criterion_count)
+        if unknown_count:
+            match_text += f"; {tr(locale, 'unknown_criteria', count=unknown_count)}"
+        text_lines.append(f"\n{program.university.short_name} — {program.name}\n{match_text} | {tuition} | {tr(locale, 'housing_label')}: {housing}")
         buttons.append([_button(tr(locale, "open", university=program.university.short_name), f"program:{program.id}")])
     if len(results) >= 2:
         buttons.append([_button(tr(locale, "compare"), "compare:" + ",".join(str(item[0].id) for item in results[:3]))])
