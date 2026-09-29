@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from .config import get_settings
 from .db import Base, engine, get_db, migrate_schema
-from .max_client import MaxClient
+from .max_client import MaxClient, callback_id_context
 from .i18n import COUNTRY_LABELS, LANGUAGES, programme_content, route_step_text, tr
 from .models import Application, ApplicationDocument, ApplicationStep, ProcessedUpdate, Program, ProgramFact, University, User
 from .application_documents import render_application_checklist
@@ -483,6 +483,7 @@ async def _handle_max_update(update: dict, db: Session) -> None:
         if action.startswith("onboard:"):
             _, submitted_state, value = action.split(":", 2)
             if state_aliases.get(submitted_state, submitted_state) != current_state:
+                await max_client.send_message(send_id, _onboarding_prompt(locale, current_state), _onboarding_buttons(locale, current_state))
                 return
         else:
             value = action
@@ -706,6 +707,9 @@ async def handle_max_update(update: dict, db: Session) -> None:
         parsed_user_id = None
     user = db.scalar(select(User).where(User.max_user_id == parsed_user_id)) if parsed_user_id is not None else None
     previous_state = user.state if user else None
+    callback = update.get("callback") or {}
+    callback_id = callback.get("callback_id") if update.get("update_type") == "message_callback" else None
+    callback_token = callback_id_context.set(callback_id) if isinstance(callback_id, str) and callback_id else None
     try:
         await _handle_max_update(update, db)
     except Exception:
@@ -717,6 +721,9 @@ async def handle_max_update(update: dict, db: Session) -> None:
                 current_user.state = previous_state
                 db.commit()
         raise
+    finally:
+        if callback_token is not None:
+            callback_id_context.reset(callback_token)
     db.add(ProcessedUpdate(event_key=event_key))
     try:
         db.commit()

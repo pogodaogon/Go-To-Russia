@@ -1,9 +1,13 @@
 import httpx
 import asyncio
+from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .config import get_settings
+
+
+callback_id_context: ContextVar[str | None] = ContextVar("max_callback_id", default=None)
 
 
 class MaxClient:
@@ -26,8 +30,12 @@ class MaxClient:
             return {"mock": True, "text": text}
         payload: dict = {"text": text}
         payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
+        callback_id = callback_id_context.get()
+        url = f"{self.base_url}/answers" if callback_id else f"{self.base_url}/messages"
+        params = {"callback_id": callback_id} if callback_id else {"user_id": user_id}
+        body = {"message": payload} if callback_id else payload
         async with httpx.AsyncClient(timeout=20, verify=self.verify) as client:
-            response = await client.post(f"{self.base_url}/messages", params={"user_id": user_id}, headers={"Authorization": self.token}, json=payload)
+            response = await client.post(url, params=params, headers={"Authorization": self.token}, json=body)
             response.raise_for_status()
             return response.json()
 
@@ -68,8 +76,12 @@ class MaxClient:
                     {"type": "inline_keyboard", "payload": {"buttons": [[{"type": "callback", "text": "☰ Меню / Menu", "payload": "menu"}]]}},
                 ],
             }
+            callback_id = callback_id_context.get()
+            url = f"{self.base_url}/answers" if callback_id else f"{self.base_url}/messages"
+            params = {"callback_id": callback_id} if callback_id else {"user_id": user_id}
+            body = {"message": payload} if callback_id else payload
             for attempt in range(3):
-                response = await client.post(f"{self.base_url}/messages", params={"user_id": user_id}, headers=headers, json=payload)
+                response = await client.post(url, params=params, headers=headers, json=body)
                 if response.is_success:
                     return response.json()
                 if attempt < 2 and "attachment.not.ready" in response.text:

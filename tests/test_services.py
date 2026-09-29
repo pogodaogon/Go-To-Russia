@@ -28,6 +28,27 @@ def test_callback_uses_pressing_user_not_bot_sender():
     assert payload == "degree:bachelor"
 
 
+def test_real_max_callback_payload_shape_is_parsed():
+    update = {
+        "update_type": "message_callback",
+        "callback": {
+            "timestamp": 1739184000000,
+            "callback_id": "CALLBACK_ID_REDACTED",
+            "user": {"user_id": 54321},
+            "payload": "onboard:ask_degree:bachelor",
+        },
+        "message": {
+            "recipient": {"chat_type": "dialog", "user_id": 54321},
+            "body": {"text": "Choose a degree"},
+            "sender": {"user_id": 12345, "is_bot": True},
+        },
+    }
+    user_id, text, payload = _user_from_update(update)
+    assert user_id == 54321
+    assert text == "Choose a degree"
+    assert payload == "onboard:ask_degree:bachelor"
+
+
 def test_ai_matches_whole_term_not_aircraft_substring():
     aircraft = Program(name="Aircraft Engineering", degree="bachelor", field="engineering", categories="aviation, aerospace engineering", language="english", source_url="https://example.com")
     computer_science = Program(name="Computer Science", degree="bachelor", field="computer_science", categories="artificial_intelligence, software_engineering", language="english", source_url="https://example.com")
