@@ -10,6 +10,18 @@ from .config import get_settings
 callback_id_context: ContextVar[str | None] = ContextVar("max_callback_id", default=None)
 
 
+def _ensure_success(response: httpx.Response) -> dict:
+    response.raise_for_status()
+    result = response.json()
+    if isinstance(result, dict) and result.get("success") is False:
+        # MAX can report an application-level failure with HTTP 200. Treat it
+        # as a failed delivery so webhook processing is not silently recorded
+        # as complete after a rejected message or callback answer.
+        detail = result.get("message")
+        raise RuntimeError(f"MAX API rejected the request: {detail or 'unspecified error'}")
+    return result
+
+
 class MaxClient:
     def __init__(self) -> None:
         settings = get_settings()
@@ -36,8 +48,7 @@ class MaxClient:
         body = {"message": payload} if callback_id else payload
         async with httpx.AsyncClient(timeout=20, verify=self.verify) as client:
             response = await client.post(url, params=params, headers={"Authorization": self.token}, json=body)
-            response.raise_for_status()
-            return response.json()
+            return _ensure_success(response)
 
     async def send_file(self, user_id: int, filename: str, content: bytes, caption: str) -> dict | None:
         """Upload and send a small generated text file using MAX's file API."""
@@ -83,7 +94,7 @@ class MaxClient:
             for attempt in range(3):
                 response = await client.post(url, params=params, headers=headers, json=body)
                 if response.is_success:
-                    return response.json()
+                    return _ensure_success(response)
                 if attempt < 2 and "attachment.not.ready" in response.text:
                     await asyncio.sleep(1 + attempt)
                     continue
@@ -97,13 +108,11 @@ class MaxClient:
             payload["secret"] = secret
         async with httpx.AsyncClient(timeout=20, verify=self.verify) as client:
             response = await client.post(f"{self.base_url}/subscriptions", headers={"Authorization": self.token}, json=payload)
-            response.raise_for_status()
-            return response.json()
+            return _ensure_success(response)
 
     async def set_commands(self, commands: list[dict]) -> dict:
         if not self.token:
             return {"commands": commands, "mock": True}
         async with httpx.AsyncClient(timeout=20, verify=self.verify) as client:
             response = await client.patch(f"{self.base_url}/me/commands", headers={"Authorization": self.token}, json={"commands": commands})
-            response.raise_for_status()
-            return response.json()
+            return _ensure_success(response)

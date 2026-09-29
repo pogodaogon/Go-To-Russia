@@ -7,11 +7,14 @@ from app.max_client import MaxClient, callback_id_context
 class FakeResponse:
     is_success = True
 
+    def __init__(self, result=None):
+        self.result = result or {"success": True}
+
     def raise_for_status(self):
         return None
 
     def json(self):
-        return {"success": True}
+        return self.result
 
 
 class FakeAsyncClient:
@@ -28,11 +31,12 @@ class FakeAsyncClient:
 
     async def post(self, url, **kwargs):
         self.calls.append((url, kwargs))
-        return FakeResponse()
+        return self.response
 
 
 def test_callback_message_uses_max_answers_endpoint(monkeypatch):
     FakeAsyncClient.calls = []
+    FakeAsyncClient.response = FakeResponse()
     monkeypatch.setattr(max_client_module.httpx, "AsyncClient", FakeAsyncClient)
     client = MaxClient.__new__(MaxClient)
     client.base_url = "https://platform-api2.max.ru"
@@ -56,6 +60,7 @@ def test_callback_message_uses_max_answers_endpoint(monkeypatch):
 
 def test_regular_message_still_uses_messages_endpoint(monkeypatch):
     FakeAsyncClient.calls = []
+    FakeAsyncClient.response = FakeResponse()
     monkeypatch.setattr(max_client_module.httpx, "AsyncClient", FakeAsyncClient)
     client = MaxClient.__new__(MaxClient)
     client.base_url = "https://platform-api2.max.ru"
@@ -66,3 +71,20 @@ def test_regular_message_still_uses_messages_endpoint(monkeypatch):
     assert url.endswith("/messages")
     assert call["params"] == {"user_id": 54321}
     assert call["json"]["text"] == "Hello"
+
+
+def test_http_200_with_max_success_false_is_treated_as_failure(monkeypatch):
+    FakeAsyncClient.calls = []
+    FakeAsyncClient.response = FakeResponse({"success": False, "message": "callback expired"})
+    monkeypatch.setattr(max_client_module.httpx, "AsyncClient", FakeAsyncClient)
+    client = MaxClient.__new__(MaxClient)
+    client.base_url = "https://platform-api2.max.ru"
+    client.token = "test-token"
+    client.verify = True
+
+    try:
+        asyncio.run(client.send_message(54321, "Hello"))
+    except RuntimeError as exc:
+        assert "callback expired" in str(exc)
+    else:
+        raise AssertionError("MAX API application-level failure must not be treated as success")

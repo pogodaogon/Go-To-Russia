@@ -6,6 +6,8 @@ from app.db import Base
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from app.main import _user_from_update
+from app import main as main_module
+import asyncio
 from app.seed import seed_database
 
 
@@ -47,6 +49,47 @@ def test_real_max_callback_payload_shape_is_parsed():
     assert user_id == 54321
     assert text == "Choose a degree"
     assert payload == "onboard:ask_degree:bachelor"
+
+
+def test_max_callback_runs_profile_transition_and_answers_pressed_message(monkeypatch):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    sent = []
+
+    class FakeMaxClient:
+        async def send_message(self, user_id, text, buttons=None):
+            from app.max_client import callback_id_context
+            sent.append((user_id, text, buttons, callback_id_context.get()))
+
+    monkeypatch.setattr(main_module, "max_client", FakeMaxClient())
+    update = {
+        "update_type": "message_callback",
+        "callback": {
+            "callback_id": "callback-test-123",
+            "user": {"user_id": 54321},
+            "payload": "onboard:ask_degree:bachelor",
+        },
+        "message": {
+            "recipient": {"chat_type": "dialog", "user_id": 54321},
+            "body": {"text": "Bachelor"},
+            "sender": {"user_id": 12345, "is_bot": True},
+        },
+    }
+    with Session(engine) as db:
+        user = User(max_user_id=54321, state="ask_degree", ui_language="en")
+        db.add(user)
+        db.commit()
+
+        asyncio.run(main_module.handle_max_update(update, db))
+
+        db.refresh(user)
+        assert user.degree == "bachelor"
+        assert user.state == "ask_field"
+        assert len(sent) == 1
+        user_id, _, buttons, callback_id = sent[0]
+        assert user_id == 54321
+        assert callback_id == "callback-test-123"
+        assert any(button["payload"].startswith("onboard:ask_field:") for row in buttons for button in row)
 
 
 def test_ai_matches_whole_term_not_aircraft_substring():
