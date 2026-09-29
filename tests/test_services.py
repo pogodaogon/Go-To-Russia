@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.main import _user_from_update
 from app import main as main_module
 import asyncio
+from app.main import _onboarding_prompt
 from app.seed import seed_database
 
 
@@ -90,6 +91,19 @@ def test_max_callback_runs_profile_transition_and_answers_pressed_message(monkey
         assert user_id == 54321
         assert callback_id == "callback-test-123"
         assert any(button["payload"].startswith("onboard:ask_field:") for row in buttons for button in row)
+        assert sent[0][1] == _onboarding_prompt("en", "ask_field")
+
+
+def test_field_question_is_defined_for_every_supported_ui_language():
+    prompts = {}
+    for language in ("ru", "en", "fr", "es"):
+        prompt = _onboarding_prompt(language, "ask_field")
+        assert prompt.strip() not in ("", "?")
+        assert chr(0x5c) + "u" not in prompt
+        prompts[language] = prompt
+    assert ord(prompts["ru"][0]) == 0x041A
+    assert chr(0x00E9) in prompts["fr"]
+    assert ord(prompts["es"][0]) == 0x00BF
 
 
 def test_ai_matches_whole_term_not_aircraft_substring():
