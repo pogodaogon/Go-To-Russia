@@ -110,4 +110,4 @@ The programme catalogue is manually curated and links to university sources. A w
 python -m scripts.monitor_official_catalog
 ```
 
-The application route can export a UTF-8 text checklist with step/document statuses, applicant notes, and official source links. It is a personal preparation file, not an official form or submitted application. Uploaded scans and other sensitive files are not included.
+The application route shows university-specific submission, contract, and in-person contact instructions, and can export them in a UTF-8 text checklist. Guidance is localized into Russian, English, French, and Spanish. The checklist includes step/document statuses, applicant notes, and official source links. It is a personal preparation file, not an official form or submitted application. Uploaded scans and other sensitive files are not included. Intake dates and contract terms can change, so users are directed to confirm the current cycle with the university.

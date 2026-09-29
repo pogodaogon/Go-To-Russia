@@ -18,6 +18,7 @@ from .max_client import MaxClient
 from .i18n import COUNTRY_LABELS, LANGUAGES, programme_content, route_step_text, tr
 from .models import Application, ApplicationDocument, ApplicationStep, ProcessedUpdate, Program, ProgramFact, University, User
 from .application_documents import render_application_checklist
+from .admission_guides import render_admission_guide
 from .schemas import ApplicationCreate, ApplicationDocumentResponse, ApplicationDocumentUpdate, ApplicationResponse, ProfileResponse, ProfileUpdate, ProgramResponse, QuestionRequest, RecommendationRequest, UniversityResponse
 from .seed import seed_database
 from .services import CRITERIA, create_application, recommendations
@@ -617,6 +618,7 @@ async def _handle_max_update(update: dict, db: Session) -> None:
                 mark = "✅" if step.status == "completed" else "⬜"
                 title, description = route_step_text(step.step_type, locale)
                 lines.append(f"{mark} {step.position}. {title}\n{description}\n{'Источник' if locale == 'ru' else 'Source'}: {step.source_url}")
+            lines.extend(("", render_admission_guide(application.program.university.short_name, locale)))
             document_buttons = []
             if application.documents:
                 lines.append("\n" + ("Документы:" if locale == "ru" else "Documents:"))
