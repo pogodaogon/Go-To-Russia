@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-admission}
       POSTGRES_USER: ${POSTGRES_USER:-admission}
@@ -17,6 +18,7 @@ services:
 
   app:
     build: .
+    restart: unless-stopped
     env_file:
       - path: .env
         required: false
