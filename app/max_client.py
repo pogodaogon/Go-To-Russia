@@ -1,5 +1,7 @@
 import httpx
+import asyncio
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .config import get_settings
 
@@ -28,6 +30,52 @@ class MaxClient:
             response = await client.post(f"{self.base_url}/messages", params={"user_id": user_id}, headers={"Authorization": self.token}, json=payload)
             response.raise_for_status()
             return response.json()
+
+    async def send_file(self, user_id: int, filename: str, content: bytes, caption: str) -> dict | None:
+        """Upload and send a small generated text file using MAX's file API."""
+        if Path(filename).name != filename or not filename.endswith(".txt") or len(content) > 1024 * 1024:
+            raise ValueError("Only generated .txt files up to 1 MiB can be sent")
+        if not self.token:
+            print(f"[MAX MOCK -> {user_id}] file={filename} bytes={len(content)} caption={caption}")
+            return {"mock": True, "filename": filename, "size": len(content)}
+
+        headers = {"Authorization": self.token, "Accept": "application/json"}
+        async with httpx.AsyncClient(timeout=30, verify=self.verify) as client:
+            upload_info = await client.post(f"{self.base_url}/uploads", params={"type": "file"}, headers=headers)
+            upload_info.raise_for_status()
+            upload_data = upload_info.json()
+            upload_url = upload_data.get("url")
+            if not isinstance(upload_url, str):
+                raise RuntimeError("MAX did not return a file upload URL")
+            parsed = urlparse(upload_url)
+            if parsed.scheme != "https" or parsed.hostname not in {"fu.oneme.ru", "omu.okcdn.ru"}:
+                raise RuntimeError("MAX returned an unexpected file upload host")
+
+            uploaded = await client.post(
+                upload_url,
+                headers=headers,
+                files={"data": (filename, content, "text/plain; charset=utf-8")},
+            )
+            uploaded.raise_for_status()
+            media_token = uploaded.json().get("token")
+            if not isinstance(media_token, str) or not media_token:
+                raise RuntimeError("MAX did not return a file token")
+
+            payload = {
+                "text": caption,
+                "attachments": [
+                    {"type": "file", "payload": {"token": media_token}},
+                    {"type": "inline_keyboard", "payload": {"buttons": [[{"type": "callback", "text": "☰ Меню / Menu", "payload": "menu"}]]}},
+                ],
+            }
+            for attempt in range(3):
+                response = await client.post(f"{self.base_url}/messages", params={"user_id": user_id}, headers=headers, json=payload)
+                if response.is_success:
+                    return response.json()
+                if attempt < 2 and "attachment.not.ready" in response.text:
+                    await asyncio.sleep(1 + attempt)
+                    continue
+                response.raise_for_status()
 
     async def subscribe(self, public_url: str, secret: str | None = None) -> dict:
         if not self.token:

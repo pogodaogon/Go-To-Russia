@@ -16,6 +16,10 @@ FIELD_ALIASES = {
     "engineering": ("engineering", "computer science", "applied mathematics", "informatics"),
     "economics": ("economics", "business analytics", "finance", "management"),
     "information_security": ("information security", "cybersecurity", "cyber security", "computer security", "network security", "security of information technologies", "information security"),
+    "telecommunications": ("telecommunications", "infocommunication", "communication systems", "networks", "radio and tv", "wireless connection"),
+    "applied_mathematics": ("applied mathematics", "mathematical", "data analysis", "information science"),
+    "communications": ("communications", "advertising", "public relations", "media"),
+    "robotics": ("robotics", "robotic systems", "automation", "industrial internet of things", "iot"),
 }
 
 

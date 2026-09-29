@@ -17,6 +17,7 @@ from .db import Base, engine, get_db, migrate_schema
 from .max_client import MaxClient
 from .i18n import COUNTRY_LABELS, LANGUAGES, programme_content, route_step_text, tr
 from .models import Application, ApplicationDocument, ApplicationStep, ProcessedUpdate, Program, ProgramFact, University, User
+from .application_documents import render_application_checklist
 from .schemas import ApplicationCreate, ApplicationDocumentResponse, ApplicationDocumentUpdate, ApplicationResponse, ProfileResponse, ProfileUpdate, ProgramResponse, QuestionRequest, RecommendationRequest, UniversityResponse
 from .seed import seed_database
 from .services import CRITERIA, create_application, recommendations
@@ -59,7 +60,7 @@ ONBOARDING_PROMPTS = {
     "ask_education": {"ru": "Какое у вас сейчас образование?", "en": "What is your current education?", "fr": "Quel est votre niveau d’études actuel ?", "es": "¿Cuál es tu nivel educativo actual?"},
     "ask_graduation_year": {"ru": "В каком году вы закончили или закончите школу?", "en": "In which year did or will you finish secondary school?", "fr": "En quelle année avez-vous terminé ou terminerez-vous le lycée ?", "es": "¿En qué año terminaste o terminarás la secundaria?"},
     "ask_degree": {"ru": "На какую степень вы поступаете?", "en": "Which degree are you applying for?", "fr": "À quel diplôme souhaitez-vous postuler ?", "es": "¿A qué titulación quieres solicitar plaza?"},
-    "ask_field": {"ru": "Какое направление вас интересует?", "en": "What field would you like to study?", "fr": "Quel domaine souhaitez-vous étudier ?", "es": "¿Qué campo te gustaría estudiar?"},
+        "ask_field": [("computer_science", {"en": "Computer Science", "ru": "\u0418\u043d\u0444\u043e\u0440\u043c\u0430\u0442\u0438\u043a\u0430", "fr": "Informatique", "es": "Inform\u00e1tica"}), ("information_security", {"en": "Information Security", "ru": "\u0418\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u043e\u043d\u043d\u0430\u044f \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u044c", "fr": "Cybers\u00e9curit\u00e9", "es": "Ciberseguridad"}), ("data_science", {"en": "Data Science", "ru": "\u041d\u0430\u0443\u043a\u0430 \u043e \u0434\u0430\u043d\u043d\u044b\u0445", "fr": "Science des donn\u00e9es", "es": "Ciencia de datos"}), ("engineering", {"en": "Engineering", "ru": "\u0418\u043d\u0436\u0435\u043d\u0435\u0440\u0438\u044f", "fr": "Ing\u00e9nierie", "es": "Ingenier\u00eda"}), ("robotics", {"en": "Robotics", "ru": "\u0420\u043e\u0431\u043e\u0442\u043e\u0442\u0435\u0445\u043d\u0438\u043a\u0430", "fr": "Robotique", "es": "Rob\u00f3tica"}), ("telecommunications", {"en": "Telecommunications", "ru": "\u0422\u0435\u043b\u0435\u043a\u043e\u043c\u043c\u0443\u043d\u0438\u043a\u0430\u0446\u0438\u0438", "fr": "T\u00e9l\u00e9communications", "es": "Telecomunicaciones"}), ("applied_mathematics", {"en": "Applied Mathematics", "ru": "\u041f\u0440\u0438\u043a\u043b\u0430\u0434\u043d\u0430\u044f \u043c\u0430\u0442\u0435\u043c\u0430\u0442\u0438\u043a\u0430", "fr": "Math\u00e9matiques appliqu\u00e9es", "es": "Matem\u00e1ticas aplicadas"}), ("communications", {"en": "Communications and media", "ru": "\u041a\u043e\u043c\u043c\u0443\u043d\u0438\u043a\u0430\u0446\u0438\u0438 \u0438 \u043c\u0435\u0434\u0438\u0430", "fr": "Communication et m\u00e9dias", "es": "Comunicaci\u00f3n y medios"}), ("medicine", {"en": "Medicine and health", "ru": "\u041c\u0435\u0434\u0438\u0446\u0438\u043d\u0430 \u0438 \u0437\u0434\u043e\u0440\u043e\u0432\u044c\u0435", "fr": "M\u00e9decine et sant\u00e9", "es": "Medicina y salud"}), ("economics", {"en": "Economics and business", "ru": "\u042d\u043a\u043e\u043d\u043e\u043c\u0438\u043a\u0430 \u0438 \u0431\u0438\u0437\u043d\u0435\u0441", "fr": "\u00c9conomie et commerce", "es": "Econom\u00eda y negocios"})],
     "ask_language": {"ru": "На каком языке вы хотите учиться?", "en": "Which language do you want to study in?", "fr": "Dans quelle langue souhaitez-vous étudier ?", "es": "¿En qué idioma quieres estudiar?"},
     "ask_russian_level": {"ru": "Какой у вас уровень русского языка?", "en": "What is your Russian level?", "fr": "Quel est votre niveau de russe ?", "es": "¿Cuál es tu nivel de ruso?"},
     "ask_admission_year": {"ru": "В каком году планируете поступать?", "en": "Which year do you plan to start?", "fr": "En quelle année souhaitez-vous commencer ?", "es": "¿En qué año planeas empezar?"},
@@ -78,7 +79,7 @@ def _onboarding_buttons(locale: str, state: str) -> list[list[dict]]:
     options = {
         "ask_education": [("secondary", {"en": "Secondary school", "ru": "Среднее образование", "fr": "Études secondaires", "es": "Educación secundaria"}), ("undergraduate", {"en": "Some university", "ru": "Неоконченное высшее", "fr": "Études universitaires en cours", "es": "Estudios universitarios"})],
         "ask_degree": [("bachelor", {"en": "Bachelor", "ru": "Бакалавриат", "fr": "Licence", "es": "Grado"}), ("master", {"en": "Master", "ru": "Магистратура", "fr": "Master", "es": "Máster"})],
-        "ask_field": [("computer_science", {"en": "Computer Science", "ru": "Информатика", "fr": "Informatique", "es": "Informática"}), ("information_security", {"en": "Information Security", "ru": "Информационная безопасность", "fr": "Cybersécurité", "es": "Ciberseguridad"}), ("data_science", {"en": "Data Science", "ru": "Наука о данных", "fr": "Science des données", "es": "Ciencia de datos"}), ("engineering", {"en": "Engineering", "ru": "Инженерия", "fr": "Ingénierie", "es": "Ingeniería"}), ("economics", {"en": "Economics", "ru": "Экономика", "fr": "Économie", "es": "Economía"})],
+        "ask_field": [("computer_science", {"en": "Computer Science", "ru": "Информатика", "fr": "Informatique", "es": "Informática"}), ("information_security", {"en": "Information Security", "ru": "Информационная безопасность", "fr": "Cybersécurité", "es": "Ciberseguridad"}), ("data_science", {"en": "Data Science", "ru": "Наука о данных", "fr": "Science des données", "es": "Ciencia de datos"}), ("engineering", {"en": "Engineering", "ru": "Инженерия", "fr": "Ingénierie", "es": "Ingeniería"}), ("robotics", {"en": "Robotics", "ru": "Робототехника", "fr": "Robotique", "es": "Robótica"}), ("telecommunications", {"en": "Telecommunications", "ru": "\u0422\u0435\u043b\u0435\u043a\u043e\u043c\u043c\u0443\u043d\u0438\u043a\u0430\u0446\u0438\u0438", "fr": "T\u00e9l\u00e9communications", "es": "Telecomunicaciones"}), ("applied_mathematics", {"en": "Applied Mathematics", "ru": "\u041f\u0440\u0438\u043a\u043b\u0430\u0434\u043d\u0430\u044f \u043c\u0430\u0442\u0435\u043c\u0430\u0442\u0438\u043a\u0430", "fr": "Math\u00e9matiques appliqu\u00e9es", "es": "Matem\u00e1ticas aplicadas"}), ("communications", {"en": "Communications and media", "ru": "\u041a\u043e\u043c\u043c\u0443\u043d\u0438\u043a\u0430\u0446\u0438\u0438 \u0438 \u043c\u0435\u0434\u0438\u0430", "fr": "Communication et m\u00e9dias", "es": "Comunicaci\u00f3n y medios"}), ("medicine", {"en": "Medicine and health", "ru": "Медицина и здоровье", "fr": "Médecine et santé", "es": "Medicina y salud"}), ("economics", {"en": "Economics and business", "ru": "Экономика и бизнес", "fr": "Économie et commerce", "es": "Economía y negocios"})],
         "ask_language": [("english", {"en": "English", "ru": "Английский", "fr": "Anglais", "es": "Inglés"}), ("russian", {"en": "Russian", "ru": "Русский", "fr": "Russe", "es": "Ruso"})],
         "ask_russian_level": [("none", {"en": "None", "ru": "Не знаю", "fr": "Aucun", "es": "Ninguno"}), ("basic", {"en": "Basic", "ru": "Начальный", "fr": "Débutant", "es": "Básico"}), ("intermediate", {"en": "Intermediate", "ru": "Средний", "fr": "Intermédiaire", "es": "Intermedio"}), ("advanced", {"en": "Advanced", "ru": "Продвинутый", "fr": "Avancé", "es": "Avanzado"})],
         "ask_quota": [("yes", {"en": "Yes", "ru": "Да", "fr": "Oui", "es": "Sí"}), ("no", {"en": "No", "ru": "Нет", "fr": "Non", "es": "No"})],
@@ -628,7 +629,21 @@ async def _handle_max_update(update: dict, db: Session) -> None:
             next_step = next((s for s in application.steps if s.status != "completed"), None)
             buttons = [[_button(tr(locale, "mark_step"), f"confirm_step:{application.id}:{next_step.id}")]] if next_step else []
             buttons.extend(document_buttons)
+            buttons.append([_button(tr(locale, "export_checklist"), f"route_export:{application.id}")])
             await max_client.send_message(send_id, "\n\n".join(lines), buttons)
+    elif action.startswith("route_export:"):
+        try:
+            application_id = int(action.split(":", 1)[1])
+        except ValueError:
+            await max_client.send_message(send_id, "Invalid route selection.")
+            return
+        application = db.scalar(select(Application).where(Application.id == application_id, Application.user_id == user.id).options(
+            selectinload(Application.steps), selectinload(Application.documents).joinedload(ApplicationDocument.document),
+            joinedload(Application.program).joinedload(Program.university),
+        ))
+        if application:
+            content = render_application_checklist(application, locale)
+            await max_client.send_file(send_id, f"admission-checklist-{application.id}.txt", content, tr(locale, "checklist_caption"))
     elif action.startswith("doc_ready:"):
         try:
             _, app_id, document_id = action.split(":", 2)

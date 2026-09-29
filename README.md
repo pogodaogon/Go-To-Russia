@@ -100,3 +100,14 @@ In repository **Settings > Secrets and variables > Actions**, add these secrets:
 - `DEPLOY_SSH_PRIVATE_KEY` - the private key at `%USERPROFILE%\.ssh\uniroute_github_deploy`.
 
 The server public host key is pinned in `.github/deploy_known_hosts`. To copy the private key for the GitHub secret field, run `Get-Content "$env:USERPROFILE\.ssh\uniroute_github_deploy" -Raw | Set-Clipboard` in PowerShell. Never commit the private key. Run **Actions > Tests and security > Run workflow** on `main` to deploy immediately, or push a commit to `main`.
+
+
+## Official university catalogue monitoring
+
+The programme catalogue is manually curated and links to university sources. A weekly GitHub Actions workflow checks official MTUCI and MEPhI programme pages and reports new or changed entries in the run summary. It is read-only: it never changes the application database or publishes programmes to users. A person must confirm language for international applicants, degree, admission conditions, and cycle before adding a programme. Unknown prices and dates remain unconfirmed. Run it from Actions > Official catalogue monitor > Run workflow.
+
+```powershell
+python -m scripts.monitor_official_catalog
+```
+
+The application route can export a UTF-8 text checklist with step/document statuses, applicant notes, and official source links. It is a personal preparation file, not an official form or submitted application. Uploaded scans and other sensitive files are not included.
