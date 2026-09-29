@@ -25,15 +25,13 @@ def main() -> int:
     findings = []
     for path in tracked:
         name = path.name.lower()
-        if name in FORBIDDEN_NAMES or (name.startswith(".env.") and name != ".env.example") or path.suffix.lower() in FORBIDDEN_SUFFIXES:
+        if name in FORBIDDEN_NAMES or name.startswith(".env.") or path.suffix.lower() in FORBIDDEN_SUFFIXES:
             findings.append(f"{path}: forbidden runtime or secret file")
             continue
         if not path.is_file() or path.stat().st_size > 2_000_000:
             continue
         content = path.read_bytes()
         for label, pattern in SECRET_PATTERNS.items():
-            if path.name == ".env.example" and label == "configured secret":
-                continue
             if pattern.search(content):
                 findings.append(f"{path}: possible {label}")
     for finding in findings:
