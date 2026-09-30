@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 from html.parser import HTMLParser
+import hashlib
 import json
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -18,8 +20,42 @@ PROGRAMS_URL = "https://en.mtuci.ru/academics/undergraduate_programmes/"
 INTERNATIONAL_URL = "https://en.mtuci.ru/education/intern_edu/"
 MEPHI_PROGRAMS_URL = "https://eng.mephi.ru/academics/degrees-and-programs/ba"
 MEPHI_ADMISSIONS_URL = "https://eng.mephi.ru/academics/admissions"
-ALLOWED_HOSTS = {"en.mtuci.ru", "eng.mephi.ru"}
+ALLOWED_HOSTS = {
+    "admissions.hse.ru", "en.mai.ru", "en.mtuci.ru", "eng.mephi.ru",
+    "eng.mipt.ru", "fgp.msu.ru", "www.hse.ru", "www.sechenov.ru",
+}
 MAX_PAGE_BYTES = 6 * 1024 * 1024
+OFFICIAL_SOURCE_URLS = sorted({
+    str(item[key])
+    for item in CATALOG
+    for key in ("source", "admissions_url")
+    if item.get(key)
+})
+
+
+class PageSnapshotParser(HTMLParser):
+    """Keep a small text index and title for human review of monitored pages."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.title = ""
+        self._in_title = False
+        self.text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "title":
+            self._in_title = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        clean = " ".join(data.split())
+        if clean:
+            if self._in_title:
+                self.title = (self.title + " " + clean).strip()
+            self.text.append(clean)
 
 
 class OfficialPageParser(HTMLParser):
@@ -138,6 +174,8 @@ def normalize_track(value: str) -> str:
 
 
 def _fetch(client: httpx.Client, url: str, parser_type=OfficialPageParser):
+    if urlparse(url).scheme != "https" or urlparse(url).hostname not in ALLOWED_HOSTS or urlparse(url).username or urlparse(url).password:
+        raise RuntimeError(f"Official source URL is outside the HTTPS allowlist: {url}")
     response = client.get(url, follow_redirects=True)
     response.raise_for_status()
     final_host = urlparse(str(response.url)).hostname
@@ -156,6 +194,25 @@ def discover() -> dict[str, object]:
         foreign_page = _fetch(client, INTERNATIONAL_URL)
         mephi_page = _fetch(client, MEPHI_PROGRAMS_URL, MephiTableParser)
         mephi_admissions = _fetch(client, MEPHI_ADMISSIONS_URL)
+        source_checks = []
+        signal_pattern = re.compile(r"programme|program|admission|bachelor|degree|language|tuition|deadline|information security|cybersecurity", re.I)
+        for source_url in OFFICIAL_SOURCE_URLS:
+            try:
+                page = _fetch(client, source_url, PageSnapshotParser)
+                signal_lines = [line[:240] for line in page.text if signal_pattern.search(line)][:30]
+                source_checks.append({
+                    "source": source_url,
+                    "status": "reachable_needs_human_review",
+                    "title": page.title,
+                    "sha256": hashlib.sha256(" ".join(page.text).encode("utf-8")).hexdigest(),
+                    "signals": signal_lines,
+                })
+            except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+                source_checks.append({
+                    "source": source_url,
+                    "status": "unavailable_needs_human_review",
+                    "error_type": type(exc).__name__,
+                })
 
     language_evidence = " ".join(foreign_page.page_text).casefold()
     if "all educational programs for foreign citizens are conducted in russian" not in language_evidence:
@@ -202,21 +259,34 @@ def discover() -> dict[str, object]:
         "universities": ["Moscow Technical University of Communications and Informatics", "National Research Nuclear University MEPhI"],
         "programmes_seen": len(records),
         "review_candidates": sum(item["catalog_status"] == "review_candidate" for item in records),
+        "source_pages_checked": len(source_checks),
+        "source_pages_unavailable": sum(item["status"].startswith("unavailable") for item in source_checks),
+        "source_checks": source_checks,
         "records": records,
     }
 
 
 def render_markdown(report: dict[str, object]) -> str:
+    def safe_markdown(value: object) -> str:
+        cleaned = " ".join(str(value).split())
+        cleaned = cleaned.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return re.sub(r"([\\`*_{}\[\]()#+\-.!|])", r"\\\1", cleaned)
+
     records = report["records"]
     lines = [
         "## Official catalogue monitor ? MTUCI and MEPhI",
         f"Checked {report['generated_at_utc']}. Found {report['programmes_seen']} programme tracks; {report['review_candidates']} need review.",
         "All findings are candidates only. This job never edits or publishes the application catalogue.",
+        f"Official source pages checked: {report['source_pages_checked']}; inaccessible pages requiring follow-up: {report['source_pages_unavailable']}.",
+        "Source titles, matching text snippets, and SHA-256 fingerprints are attached to the JSON report so moderators can compare weekly changes.",
         "",
     ]
     for item in records:
         state = "catalogued" if item["catalog_status"] == "catalogued" else "review candidate"
-        lines.append(f"- **{state}** — {item['code']} {item['programme']}: {item['track']} (Russian for foreign applicants; intake cycle not stated).")
+        lines.append(
+            f"- **{state}** — {safe_markdown(item['code'])} {safe_markdown(item['programme'])}: "
+            f"{safe_markdown(item['track'])} ({safe_markdown(item['language_for_foreign_applicants'])} for foreign applicants; intake cycle not stated)."
+        )
     lines.extend(("", f"Sources: [MTUCI programme list]({PROGRAMS_URL}), [MTUCI international admissions]({INTERNATIONAL_URL}), [MEPhI bachelor's programmes]({MEPHI_PROGRAMS_URL}), [MEPhI admissions]({MEPHI_ADMISSIONS_URL})."))
     return "\n".join(lines)
 
@@ -224,8 +294,12 @@ def render_markdown(report: dict[str, object]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
+    parser.add_argument("--output-json", type=Path, help="also save the machine-readable moderation report")
     args = parser.parse_args()
     report = discover()
+    if args.output_json:
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(render_markdown(report) if args.format == "markdown" else json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 

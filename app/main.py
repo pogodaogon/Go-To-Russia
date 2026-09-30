@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 import asyncio
-from datetime import date
+from datetime import date, datetime
 import hmac
 import hashlib
 import json
@@ -8,16 +8,16 @@ import math
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from .config import get_settings
 from .db import Base, engine, get_db, migrate_schema
 from .max_client import MaxClient, callback_id_context
 from .i18n import COUNTRY_LABELS, LANGUAGES, programme_content, route_step_text, tr
-from .models import Application, ApplicationDocument, ApplicationStep, ProcessedUpdate, Program, ProgramFact, University, User
+from .models import Application, ApplicationDocument, ApplicationStep, ProcessedUpdate, Program, ProgramFact, ReminderLog, University, User
 from .application_documents import render_application_checklist
 from .admission_guides import render_admission_guide
 from .schemas import ApplicationCreate, ApplicationDocumentResponse, ApplicationDocumentUpdate, ApplicationResponse, ProfileResponse, ProfileUpdate, ProgramResponse, QuestionRequest, RecommendationRequest, UniversityResponse
@@ -25,6 +25,8 @@ from .seed import seed_database
 from .services import CRITERIA, create_application, recommendations
 from .qa import answer_question
 from .reminders import reminder_loop
+from .privacy import DECLINED, NOTICE_VERSION, consent_buttons, consent_choice, consent_text, render_policy
+from .privacy_retention import privacy_retention_loop
 
 
 @asynccontextmanager
@@ -34,30 +36,68 @@ async def lifespan(_: FastAPI):
             raise RuntimeError("Production requires API_KEY and MAX_WEBHOOK_SECRET of at least 32 characters, and MAX_BOT_TOKEN")
         if hmac.compare_digest(settings.api_key, settings.max_webhook_secret):
             raise RuntimeError("Production API_KEY and MAX_WEBHOOK_SECRET must be different")
+        if settings.reviewer_api_key:
+            if len(settings.reviewer_api_key) < 32:
+                raise RuntimeError("REVIEWER_API_KEY must contain at least 32 characters")
+            if any(hmac.compare_digest(settings.reviewer_api_key, key) for key in (settings.api_key, settings.max_webhook_secret)):
+                raise RuntimeError("REVIEWER_API_KEY must be different from other production secrets")
         if not settings.database_url.startswith("postgresql") or any(placeholder in settings.database_url for placeholder in ("local-dev-only-change-me", "change-this-local-password")):
             raise RuntimeError("Production requires PostgreSQL with a non-default password")
         webhook = urlparse(settings.webhook_public_url or "")
         if webhook.scheme != "https" or not webhook.hostname or webhook.path != "/webhook/max" or webhook.username or webhook.password:
             raise RuntimeError("Production requires an HTTPS WEBHOOK_PUBLIC_URL ending in /webhook/max")
+        if not settings.data_controller_name.strip() or any(marker in settings.data_controller_name.casefold() for marker in ("configure before production", "configure-before-production", "change_me", "change-me")):
+            raise RuntimeError("Production requires DATA_CONTROLLER_NAME to identify the data controller")
+        if not settings.privacy_contact.strip() or any(marker in settings.privacy_contact.casefold() for marker in ("configure before production", "configure-before-production", "change_me", "change-me")):
+            raise RuntimeError("Production requires PRIVACY_CONTACT for privacy and deletion requests")
     Base.metadata.create_all(bind=engine)
     migrate_schema()
     with next(get_db()) as db:
         seed_database(db)
     reminder_task = asyncio.create_task(reminder_loop(), name="admission-reminders")
+    retention_task = asyncio.create_task(privacy_retention_loop(), name="privacy-retention")
     try:
         yield
     finally:
-        reminder_task.cancel()
-        try:
-            await reminder_task
-        except asyncio.CancelledError:
-            pass
+        for task in (reminder_task, retention_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title="Admission Navigator MAX Bot", version="0.1.0", lifespan=lifespan)
 settings = get_settings()
 max_client = MaxClient()
 MAX_UPDATE_MAX_BYTES = 1024 * 1024
+
+
+def _privacy_url(locale: str | None = None) -> str:
+    webhook = urlparse(settings.webhook_public_url or "")
+    if webhook.scheme and webhook.netloc:
+        base = f"{webhook.scheme}://{webhook.netloc}/privacy"
+    else:
+        base = "/privacy"
+    return f"{base}?lang={locale}" if locale in LANGUAGES else base
+
+
+def _delete_user_data(db: Session, user: User) -> None:
+    user_id = user.max_user_id
+    application_ids = select(Application.id).where(Application.user_id == user.id)
+    db.execute(delete(ReminderLog).where(ReminderLog.application_id.in_(application_ids)))
+    db.execute(delete(ProcessedUpdate).where(ProcessedUpdate.max_user_id == user_id))
+    db.delete(user)
+    db.commit()
+
+
+def _consented_user(db: Session, user_id: int) -> User:
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    if not user.consent_at or user.consent_version != NOTICE_VERSION:
+        raise HTTPException(403, "Current privacy notice consent required")
+    return user
 
 ONBOARDING_PROMPTS = {
     "ask_country": {"ru": "Из какой вы страны?", "en": "Which country are you from?", "fr": "De quel pays venez-vous ?", "es": "¿De qué país eres?"},
@@ -105,9 +145,16 @@ def _onboarding_buttons(locale: str, state: str, button_type: str = "message") -
 
 @app.middleware("http")
 async def protect_api(request: Request, call_next):
-    if settings.app_env == "production" and request.url.path not in ("/health", "/webhook/max"):
+    if settings.app_env == "production" and request.url.path not in ("/health", "/webhook/max", "/privacy"):
         supplied_key = request.headers.get("x-api-key", "")
-        if not settings.api_key or not hmac.compare_digest(supplied_key, settings.api_key):
+        reviewer_key = request.headers.get("x-reviewer-api-key", "")
+        reviewer_read_path = request.method == "GET" and (
+            request.url.path in ("/universities", "/programs", "/comparison")
+            or (request.url.path.startswith("/programs/") and request.url.path.removeprefix("/programs/").isdigit())
+        )
+        api_authorized = bool(settings.api_key and hmac.compare_digest(supplied_key, settings.api_key))
+        reviewer_authorized = bool(settings.reviewer_api_key and hmac.compare_digest(reviewer_key, settings.reviewer_api_key))
+        if not api_authorized and not (reviewer_read_path and reviewer_authorized):
             response = JSONResponse(status_code=401, content={"detail": "Invalid API key"})
         else:
             response = await call_next(request)
@@ -126,6 +173,13 @@ async def protect_api(request: Request, call_next):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": "admission-navigator", "max_configured": bool(settings.max_bot_token)}
+
+
+@app.get("/privacy", response_class=HTMLResponse, include_in_schema=False)
+def privacy_policy(lang: str = "en") -> HTMLResponse:
+    response = HTMLResponse(render_policy(lang, settings.data_controller_name, settings.privacy_contact))
+    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+    return response
 
 
 @app.get("/universities", response_model=list[UniversityResponse])
@@ -177,15 +231,16 @@ def _owned_application(db: Session, application_id: int, user_id: int) -> Applic
     ))
     if not application:
         raise HTTPException(404, "Application not found")
+    if not application.user.consent_at or application.user.consent_version != NOTICE_VERSION:
+        raise HTTPException(403, "Current privacy notice consent required")
     return application
 
 
 @app.post("/users/{max_user_id}/profile", response_model=ProfileResponse)
 def upsert_profile(max_user_id: int, payload: ProfileUpdate, db: Session = Depends(get_db)) -> User:
     user = db.scalar(select(User).where(User.max_user_id == max_user_id))
-    if not user:
-        user = User(max_user_id=max_user_id)
-        db.add(user)
+    if not user or not user.consent_at or user.consent_version != NOTICE_VERSION:
+        raise HTTPException(403, "Current privacy notice consent required in MAX before profile processing")
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(user, field, value)
     required = ("country", "age", "current_education", "graduation_year", "degree", "field", "language", "russian_level", "budget", "admission_year")
@@ -203,14 +258,14 @@ def get_profile(max_user_id: int, db: Session = Depends(get_db)) -> User:
     user = db.scalar(select(User).where(User.max_user_id == max_user_id))
     if not user:
         raise HTTPException(404, "Profile not found")
+    if not user.consent_at or user.consent_version != NOTICE_VERSION:
+        raise HTTPException(403, "Current privacy notice consent required")
     return user
 
 
 @app.post("/recommendations")
 def get_recommendations(payload: RecommendationRequest, db: Session = Depends(get_db)) -> list[dict]:
-    user = db.get(User, payload.user_id)
-    if not user:
-        raise HTTPException(404, "User not found")
+    user = _consented_user(db, payload.user_id)
     original_field = user.field
     if payload.query:
         user.field = payload.query
@@ -239,9 +294,7 @@ def get_recommendations(payload: RecommendationRequest, db: Session = Depends(ge
 
 @app.post("/questions")
 async def ask_question(payload: QuestionRequest, db: Session = Depends(get_db)) -> dict:
-    user = db.get(User, payload.user_id)
-    if not user:
-        raise HTTPException(404, "User not found")
+    user = _consented_user(db, payload.user_id)
     try:
         return await answer_question(db, payload.question, user.ui_language)
     except (httpx.HTTPError, KeyError, IndexError, TypeError):
@@ -293,6 +346,8 @@ def add_application(payload: ApplicationCreate, db: Session = Depends(get_db)) -
     program = db.scalar(select(Program).where(Program.id == payload.program_id, Program.listed.is_(True)))
     if not user or not program:
         raise HTTPException(404, "User or program not found")
+    if not user.consent_at or user.consent_version != NOTICE_VERSION:
+        raise HTTPException(403, "Current privacy notice consent required")
     return application_view(create_application(db, user, program, user.ui_language))
 
 
@@ -307,6 +362,8 @@ def get_application(application_id: int, db: Session = Depends(get_db)) -> dict:
     application = db.scalar(select(Application).where(Application.id == application_id).options(selectinload(Application.steps), selectinload(Application.documents).joinedload(ApplicationDocument.document), joinedload(Application.program).joinedload(Program.university)))
     if not application:
         raise HTTPException(404, "Application not found")
+    if not application.user.consent_at or application.user.consent_version != NOTICE_VERSION:
+        raise HTTPException(403, "Current privacy notice consent required")
     return application_view(application)
 
 
@@ -315,6 +372,8 @@ def list_applications(max_user_id: int, db: Session = Depends(get_db)) -> list[d
     user = db.scalar(select(User).where(User.max_user_id == max_user_id))
     if not user:
         return []
+    if not user.consent_at or user.consent_version != NOTICE_VERSION:
+        raise HTTPException(403, "Current privacy notice consent required")
     applications = db.scalars(select(Application).where(Application.user_id == user.id).options(selectinload(Application.steps), selectinload(Application.documents).joinedload(ApplicationDocument.document), joinedload(Application.program).joinedload(Program.university))).all()
     return [application_view(item) for item in applications]
 
@@ -324,6 +383,8 @@ def complete_step(step_id: int, db: Session = Depends(get_db)) -> dict:
     step = db.get(ApplicationStep, step_id)
     if not step:
         raise HTTPException(404, "Step not found")
+    if not step.application.user.consent_at or step.application.user.consent_version != NOTICE_VERSION:
+        raise HTTPException(403, "Current privacy notice consent required")
     step.status = "completed"
     application = step.application
     if all(item.status == "completed" for item in application.steps):
@@ -407,11 +468,53 @@ async def _handle_max_update(update: dict, db: Session) -> None:
     except (TypeError, ValueError):
         return
     user = db.scalar(select(User).where(User.max_user_id == int(user_id)))
-    if not user:
-        user = User(max_user_id=int(user_id), first_name=((update.get("user") or {}).get("first_name")))
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+    action = payload or text or ""
+    normalized_action = action.strip().casefold()
+
+    if normalized_action == "/privacy":
+        locale = user.ui_language if user and user.ui_language in LANGUAGES else "en"
+        await max_client.send_message(send_id, _privacy_url(locale))
+        return
+    if normalized_action == "/delete_data":
+        locale = user.ui_language if user and user.ui_language in LANGUAGES else "en"
+        if user:
+            _delete_user_data(db, user)
+        await max_client.send_message(send_id, tr(locale, "data_deleted"))
+        return
+
+    selection = consent_choice(text)
+    has_current_consent = bool(user and user.consent_at and user.consent_version == NOTICE_VERSION)
+    if not has_current_consent:
+        if selection:
+            locale, accepted = selection
+            if not accepted:
+                if user:
+                    _delete_user_data(db, user)
+                await max_client.send_message(send_id, DECLINED[locale])
+                return
+            if not user:
+                user = User(max_user_id=int(user_id))
+                db.add(user)
+            user.first_name = ((update.get("user") or {}).get("first_name") or user.first_name)
+            user.ui_language = locale
+            user.consent_at = datetime.utcnow()
+            user.consent_version = NOTICE_VERSION
+            user.last_activity_at = datetime.utcnow()
+            user.state = "ask_country"
+            db.commit()
+            await max_client.send_message(
+                send_id,
+                f"{tr(locale, 'welcome', bot=settings.bot_name)}\n\n{_onboarding_prompt(locale, 'ask_country')}",
+                _country_buttons(locale),
+            )
+            return
+        await max_client.send_message(send_id, consent_text(_privacy_url()), consent_buttons())
+        return
+
+    # Existing accounts created before consent was introduced must opt in
+    # before their saved profile is used again.
+    user.last_activity_at = datetime.utcnow()
+    db.commit()
 
     if update_type == "bot_started" or (text and text.strip().lower() in ("/start", "start")):
         user.state = "choose_ui_language"
@@ -419,7 +522,6 @@ async def _handle_max_update(update: dict, db: Session) -> None:
         await max_client.send_message(send_id, tr(user.ui_language, "choose_language"), _interface_language_buttons())
         return
 
-    action = payload or text or ""
     if user.state == "choose_ui_language" and not payload and text:
         chosen_language = next((code for code, name in LANGUAGES.items() if name.strip().casefold() == text.strip().casefold()), None)
         if chosen_language:
@@ -778,7 +880,13 @@ async def handle_max_update(update: dict, db: Session) -> None:
     finally:
         if callback_token is not None:
             callback_id_context.reset(callback_token)
-    db.add(ProcessedUpdate(event_key=event_key))
+    action = (_user_from_update(update)[2] or _user_from_update(update)[1] or "").strip().casefold()
+    current_user = db.scalar(select(User).where(User.max_user_id == parsed_user_id)) if parsed_user_id is not None else None
+    # Do not persist an event from a person who has not consented, and do not
+    # retain the deletion command itself after their data has been erased.
+    if not current_user or not current_user.consent_at or action == "/delete_data":
+        return
+    db.add(ProcessedUpdate(event_key=event_key, max_user_id=current_user.max_user_id))
     try:
         db.commit()
     except Exception:
@@ -852,5 +960,7 @@ async def configure_max_commands() -> dict:
         {"name": "applications", "description": "Мои поступления"},
         {"name": "language", "description": "Язык интерфейса"},
         {"name": "reset", "description": "Заполнить профиль заново"},
+        {"name": "privacy", "description": "Privacy notice / уведомление о данных"},
+        {"name": "delete_data", "description": "Delete saved data / удалить данные"},
     ]
     return await max_client.set_commands(commands)

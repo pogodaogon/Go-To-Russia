@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+  title: UniRoute Russia API
+  version: 0.1.0
+  description: >-
+    API used by the MAX admissions assistant. See openapi.json for complete
+    schemas, parameters, response bodies, and error responses. The production
+    API key is supplied to authorized reviewers separately and is never stored
+    in this repository.
+x-solution-id: uniroute-russia
+x-checks:
+  - method: GET
+    path: /health
+    role: public
+    expected-status: 200
+    response-format: application/json
+  - method: GET
+    path: /programs?admission_cycle=2027&degree=bachelor&language=english&limit=5
+    role: authorized read-only reviewer or administrator
+    expected-status: 200
+    response-format: application/json
+x-roles:
+  administrator: X-API-Key; may use all documented API routes
+  reviewer: X-Reviewer-API-Key; read-only catalogue routes only
+  max-webhook: X-Max-Bot-Api-Secret; event ingress only
+servers:
+  - url: https://77-91-115-50.sslip.io
+    description: Production HTTPS API
+security:
+  - ApiKey: []
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    MaxWebhookSecret:
+      type: apiKey
+      in: header
+      name: X-Max-Bot-Api-Secret
+    ReviewerApiKey:
+      type: apiKey
+      in: header
+      name: X-Reviewer-API-Key
+paths:
+  /health:
+    get:
+      summary: Public service health check
+      security: []
+      responses:
+        "200":
+          description: Service is alive
+  /universities:
+    get:
+      summary: List universities
+      security:
+        - ApiKey: []
+        - ReviewerApiKey: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema: {type: string}
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+      responses:
+        "200": {description: University records; see openapi.json schema}
+        "401": {description: Missing or invalid X-API-Key}
+  /programs:
+    get:
+      summary: List verified listed programs for an admission cycle
+      security:
+        - ApiKey: []
+        - ReviewerApiKey: []
+      parameters:
+        - name: degree
+          in: query
+          schema: {type: string}
+        - name: language
+          in: query
+          schema: {type: string}
+        - name: field
+          in: query
+          schema: {type: string}
+        - name: admission_cycle
+          in: query
+          schema: {type: integer, default: 2027}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 100}
+      responses:
+        "200": {description: Program records with sources, verification dates and confirmed deadlines}
+        "401": {description: Missing or invalid X-API-Key}
+  /programs/{program_id}:
+    get:
+      summary: Get one listed program
+      security:
+        - ApiKey: []
+        - ReviewerApiKey: []
+      parameters:
+        - name: program_id
+          in: path
+          required: true
+          schema: {type: integer}
+      responses:
+        "200": {description: Program and verified facts}
+        "404": {description: Program not found}
+        "401": {description: Missing or invalid X-API-Key}
+x-review-access:
+  credential: X-Reviewer-API-Key
+  role: Read-only access to GET /health, /universities, /programs, /programs/{program_id}, and /comparison.
+  distribution: Configure REVIEWER_API_KEY as a random secret of at least 32 characters and provide it through the hackathon private channel; never include credentials in this repository or presentation.
+  test-account: Not required; use the synthetic fixture data/api-test-data.json.
+  primary-check: Run /health, then use authorized key for /universities and /programs.

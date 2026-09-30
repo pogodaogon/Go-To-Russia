@@ -1,0 +1,33 @@
+{
+  "notice": "Synthetic API examples only. IDs are illustrative and may not exist in production. No credentials or real user records are included.",
+  "requests": [
+    {
+      "name": "health",
+      "method": "GET",
+      "path": "/health",
+      "auth": "none",
+      "expected_status": 200
+    },
+    {
+      "name": "list_2027_english_bachelors",
+      "method": "GET",
+      "path": "/programs?admission_cycle=2027&degree=bachelor&language=english&limit=5",
+      "auth": "X-Reviewer-API-Key supplied privately to authorized reviewer",
+      "expected_status": 200,
+      "example_response": [
+        {
+          "id": 10001,
+          "university": "Example University",
+          "name": "Example English-Taught Program",
+          "degree": "bachelor",
+          "field": "computer_science",
+          "language": "english",
+          "admission_cycle": 2027,
+          "source_url": "https://example.edu/program",
+          "verified_at": "2026-09-01",
+          "deadlines": []
+        }
+      ]
+    }
+  ]
+}

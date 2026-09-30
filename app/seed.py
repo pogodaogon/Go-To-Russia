@@ -302,6 +302,7 @@ UNIVERSITY_OVERVIEW = [
 
 def seed_database(db: Session) -> int:
     db.query(Program).update({Program.listed: False}, synchronize_session=False)
+    catalogued_universities = {item["short_name"] for item in CATALOG}
     for item in CATALOG:
         university = db.scalar(select(University).where(University.short_name == item["short_name"]))
         if university is None:
@@ -365,6 +366,10 @@ def seed_database(db: Session) -> int:
                 fact.value = f"{value} {currency}"
                 fact.source_url = source
     for code, name, website, source, fields in UNIVERSITY_OVERVIEW:
+        # Some catalogued programme universities also occur in the overview
+        # directory. Do not let that later pass downgrade their catalog level.
+        if code in catalogued_universities:
+            continue
         university = db.scalar(select(University).where(University.short_name == code))
         if university is None:
             university = University(name=name, short_name=code, website=website, city="Moscow")

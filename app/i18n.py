@@ -319,6 +319,11 @@ TEXT = {
 }
 
 
+TEXT["ru"]["data_deleted"] = "\u0412\u0430\u0448\u0438 \u0434\u0430\u043d\u043d\u044b\u0435 \u0443\u0434\u0430\u043b\u0435\u043d\u044b."
+TEXT["en"]["data_deleted"] = "Your data has been deleted."
+TEXT["fr"]["data_deleted"] = "Vos donn\u00e9es ont \u00e9t\u00e9 supprim\u00e9es."
+TEXT["es"]["data_deleted"] = "Sus datos se han eliminado."
+
 PROGRAM_TRANSLATIONS = {
     "MIPT_ru": {
         "description": "В официальном каталоге указана англоязычная программа бакалавриата 01.03.02 «Информатика и вычислительная техника». Опубликованная стоимость относится к 2026 году; стоимость и срок подачи на набор 2027 года пока не подтверждены. Наличие общежития уточняйте в МФТИ.",
