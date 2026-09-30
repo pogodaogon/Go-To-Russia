@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     reminder_days: str = "30,7,1"
     admission_year: int = 2027
     default_currency: str = "RUB"
-    data_controller_name: str = "Project team (configure before production)"
+    data_controller_name: str = "Тимошенко Никита Андреевич"
     privacy_contact: str = "Configure before production"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
