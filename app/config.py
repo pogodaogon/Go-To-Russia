@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     admission_year: int = 2027
     default_currency: str = "RUB"
     data_controller_name: str = "Тимошенко Никита Андреевич"
-    privacy_contact: str = "Configure before production"
+    privacy_contact: str = "natimoshenko28@gmail.com"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
