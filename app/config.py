@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     max_ca_bundle: str = "certs/max-ca-bundle.pem"
     max_webhook_secret: str | None = None
     api_key: str | None = None
+    reviewer_api_key: str | None = None
     webhook_public_url: str | None = None
     llm_api_base_url: str | None = None
     llm_api_key: str | None = None
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     reminder_days: str = "30,7,1"
     admission_year: int = 2027
     default_currency: str = "RUB"
+    data_controller_name: str = "Project team (configure before production)"
+    privacy_contact: str = "Configure before production"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -27,7 +27,10 @@ class User(Base):
     interested_in_quota: Mapped[bool] = mapped_column(Boolean, default=False)
     admission_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     state: Mapped[str] = mapped_column(String(60), default="start")
+    consent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consent_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     applications: Mapped[list["Application"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
@@ -181,4 +184,5 @@ class ProcessedUpdate(Base):
     __tablename__ = "processed_updates"
     id: Mapped[int] = mapped_column(primary_key=True)
     event_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    max_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     processed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

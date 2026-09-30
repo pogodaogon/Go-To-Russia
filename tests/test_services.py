@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from app.models import Program, University, User
 from app.services import field_matches, recommendations, score_program
@@ -12,6 +12,7 @@ from app.main import _onboarding_prompt
 from app.main import _onboarding_buttons
 from app.main import _country_buttons, _country_choice, _interface_language_buttons
 from app.seed import seed_database
+from app.privacy import NOTICE_VERSION
 
 
 def test_score_program_matches_daniel_profile():
@@ -79,7 +80,7 @@ def test_max_callback_runs_profile_transition_and_answers_pressed_message(monkey
         },
     }
     with Session(engine) as db:
-        user = User(max_user_id=54321, state="ask_degree", ui_language="en")
+        user = User(max_user_id=54321, state="ask_degree", ui_language="en", consent_at=datetime.utcnow(), consent_version=NOTICE_VERSION)
         db.add(user)
         db.commit()
 
@@ -140,7 +141,7 @@ def test_message_button_answer_is_parsed_as_the_selected_profile_value(monkeypat
         },
     }
     with Session(engine) as db:
-        user = User(max_user_id=54321, state="ask_field", ui_language="en")
+        user = User(max_user_id=54321, state="ask_field", ui_language="en", consent_at=datetime.utcnow(), consent_version=NOTICE_VERSION)
         db.add(user)
         db.commit()
         asyncio.run(main_module.handle_max_update(update, db))
